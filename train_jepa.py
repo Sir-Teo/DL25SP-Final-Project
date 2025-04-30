@@ -545,7 +545,7 @@ def main():
     else:
         run_name = f"run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
     # initialize wandb run
-    wandb.init(project="jepa-final6", dir=run_dir, config=vars(args), name=run_name)
+    wandb.init(project="jepa-vicreg", dir=run_dir, config=vars(args), name=run_name)
     # watch model parameters and gradients in wandb
     wandb.watch(model, log="all", log_freq=100)
     # log dataset size and total trainable parameters to wandb config
@@ -577,12 +577,18 @@ def main():
             pred = preds[:,1:]    # (B,T-1,num_patches,embed_dim)
             gold = truth[:,1:]    # (B,T-1,num_patches,embed_dim)
             if args.vicreg:
-                loss = vicreg_loss(pred, gold,
+                loss, invariance_loss, var_loss, cov_loss = vicreg_loss(pred, gold,
                                      sim_coeff=args.vicreg_sim_coeff,
                                      var_coeff=args.vicreg_var_coeff,
                                      cov_coeff=args.vicreg_cov_coeff)
+                vicreg_log = {
+                    "batch_invariance_loss": invariance_loss.item(),
+                    "batch_variance_loss": var_loss.item(),
+                    "batch_covariance_loss": cov_loss.item()
+                }
             else:
                 loss = F.mse_loss(pred, gold)
+                vicreg_log = {}
 
             optimizer.zero_grad()
             loss.backward()
@@ -591,7 +597,9 @@ def main():
             scheduler.step()
             # log batch stats to wandb
             global_step = (epoch - 1) * len(loader) + batch_idx
-            wandb.log({"batch_loss": loss.item(), "learning_rate": optimizer.param_groups[0]['lr']}, step=global_step)
+            log_data = {"batch_loss": loss.item(), "learning_rate": optimizer.param_groups[0]['lr']}
+            log_data.update(vicreg_log) # Add vicreg terms if applicable
+            wandb.log(log_data, step=global_step)
             total_loss += loss.item() * B
             pbar.set_postfix({'loss': loss.item()})
         avg_loss = total_loss / len(dataset)
@@ -606,11 +614,13 @@ def main():
         epoch_path = os.path.join(run_dir, f"model_epoch_{epoch}.pth")
         torch.save(model.state_dict(), epoch_path)
         print(f"Saved JEPA model to {epoch_path}")
+        wandb.save(epoch_path)
 
     # save final model
     final_save_path = os.path.join(run_dir, "final_checkpoint.pth")
     torch.save(model.state_dict(), final_save_path)
     print(f"Saved final JEPA model to {final_save_path}")
+    wandb.save(final_save_path)
     # finish wandb run
     wandb.finish()
 
@@ -639,7 +649,9 @@ def vicreg_loss(x, y, sim_coeff=1.0, var_coeff=1.0, cov_coeff=0.01, eps=1e-4):
         cov = cov - torch.diag(diag)
         return cov.pow(2).sum() / D
     cov_loss = (covariance_loss(x) + covariance_loss(y)) / 2
-    return sim_coeff * invariance_loss + var_coeff * var_loss + cov_coeff * cov_loss
+    # Calculate total loss
+    total_loss = sim_coeff * invariance_loss + var_coeff * var_loss + cov_coeff * cov_loss
+    return total_loss, invariance_loss, var_loss, cov_loss
 
 if __name__ == "__main__":
     main() 
