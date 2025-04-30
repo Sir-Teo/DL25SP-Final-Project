@@ -228,21 +228,25 @@ class JEPAWrapper(nn.Module):
         # register ImageNet normalization on the correct device
         self.register_buffer('rgb_mean', torch.tensor([0.485,0.456,0.406], device=self.device).view(1,3,1,1))
         self.register_buffer('rgb_std',  torch.tensor([0.229,0.224,0.225], device=self.device).view(1,3,1,1))
-        # compute normalized patch coordinates for each patch token
-        grid_size = 224 // self.encoder.patch_size
-        xs = torch.linspace(0, 1, grid_size, device=self.device)
-        ys = torch.linspace(0, 1, grid_size, device=self.device)
-        yy, xx = torch.meshgrid(ys, xs)
-        coords = torch.stack([xx, yy], dim=-1).view(-1, 2)  # (P,2)
+        # compute patch coordinates and number of tokens per frame based on feature_key
+        if self.encoder.latent_ndim == 2:
+            # patch tokens mode
+            grid_size = 224 // self.encoder.patch_size
+            xs = torch.linspace(0, 1, grid_size, device=self.device)
+            ys = torch.linspace(0, 1, grid_size, device=self.device)
+            yy, xx = torch.meshgrid(ys, xs)
+            coords = torch.stack([xx, yy], dim=-1).view(-1, 2)  # (P,2)
+            num_patches = coords.shape[0]
+        else:
+            # cls token mode: single token with dummy coordinate
+            coords = torch.tensor([[0.0, 0.0]], device=self.device)  # (1,2)
+            num_patches = coords.shape[0]
         self.register_buffer('patch_coords', coords)
         # action token coordinate indicator
         action_coord = torch.tensor([-1.0, -1.0], device=self.device)
         self.register_buffer('action_coords', action_coord)
         # combined embedding dimension (DINO-V2 feat dim + coord dim)
         self.embed_dim = self.repr_dim + coords.size(-1)
-        # compute number of patches per frame (assume 224x224 input)
-        num_side = 224 // self.encoder.patch_size
-        num_patches = num_side * num_side
         self.num_patches = num_patches
         extended_patches = num_patches + 1
         self.predictor = ViTPredictor(
@@ -283,8 +287,9 @@ class JEPAWrapper(nn.Module):
 
         P = self.num_patches
         patches = patches.view(B, T, P, self.repr_dim)
-        coords  = self.patch_coords.view(1, 1, P, 2)
-        patches = torch.cat([patches, coords.expand_as(patches[...,:1])], dim=-1)  # → embed_dim
+        # append coordinate dims to patch embeddings
+        coords = self.patch_coords.view(1, 1, P, 2).expand(B, T, P, 2)
+        patches = torch.cat([patches, coords], dim=-1)  # → embed_dim
 
         # -------- action token ---------------------------------------------------
         # embed actions per timestep using temporal Conv1d encoder
@@ -479,7 +484,7 @@ def main():
     parser.add_argument("--vicreg-var-coeff", type=float, default=1.0, help="VICReg variance coefficient")
     parser.add_argument("--vicreg-cov-coeff", type=float, default=0.01, help="VICReg covariance coefficient")
     parser.add_argument("--sched-sample-prob", type=float, default=1.0, help="Scheduled sampling: probability of using model prediction instead of ground truth for next input")
-    parser.add_argument("--output-dir", type=str, required=True, help="Directory to save run outputs (checkpoints, logs, plots)")
+    parser.add_argument("--output-dir", type=str,default="runs/tests",  help="Directory to save run outputs (checkpoints, logs, plots)")
     parser.add_argument("--run-name", type=str, default=None, help="Name for wandb run")
     args = parser.parse_args()
 

@@ -8,7 +8,7 @@
 #SBATCH --time=3-00:00:00
 #SBATCH --job-name=hcc
 #SBATCH --output=/gpfs/scratch/wz1492/DL25SP-Final-Project/logs/hparam_search_%A_%a.out
-#SBATCH --array=1-5
+#SBATCH --array=1-7
 
 # load modules and environment
 module load gcc/8.1.0
@@ -104,6 +104,7 @@ python train_jepa.py \
   --predictor-dim-head $dim_head \
   --predictor-mlp-dim $mlp_dim \
   --predictor-dropout $dropout \
+  --feature-key x_norm_clstoken \
   --predictor-pool cls \
   --predictor-emb-dropout $dropout \
   --sched-sample-prob $sched_prob \
