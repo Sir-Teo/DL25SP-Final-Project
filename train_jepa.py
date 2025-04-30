@@ -44,6 +44,12 @@ def normalize_latents(z):
     z = z / (z.std(dim=0, keepdim=True) + 1e-6)
     return z
 
+#helper functions for scheduled sampling
+def get_scheduled_sampling_prob(epoch, total_epochs, initial_prob=0.5, final_prob=0.0):
+    """Calculate scheduled sampling probability that linearly decays from initial_prob to final_prob"""
+    progress = epoch / total_epochs
+    return initial_prob - (initial_prob - final_prob) * progress
+
 # ============================================================================
 # Encoder: DINO-V2 patch embeddings
 # ============================================================================
@@ -483,7 +489,8 @@ def main():
     parser.add_argument("--vicreg-sim-coeff", type=float, default=1.0, help="VICReg similarity coefficient")
     parser.add_argument("--vicreg-var-coeff", type=float, default=1.0, help="VICReg variance coefficient")
     parser.add_argument("--vicreg-cov-coeff", type=float, default=0.01, help="VICReg covariance coefficient")
-    parser.add_argument("--sched-sample-prob", type=float, default=1.0, help="Scheduled sampling: probability of using model prediction instead of ground truth for next input")
+    parser.add_argument("--initial-sched-prob", type=float, default=1.0, help="Initial scheduled sampling probability")
+    parser.add_argument("--final-sched-prob", type=float, default=1.0, help="Final scheduled sampling probability")
     parser.add_argument("--output-dir", type=str,default="runs/tests",  help="Directory to save run outputs (checkpoints, logs, plots)")
     parser.add_argument("--run-name", type=str, default=None, help="Name for wandb run")
     args = parser.parse_args()
@@ -561,6 +568,13 @@ def main():
         json.dump(vars(args), f, indent=4)
 
     for epoch in range(1, args.epochs + 1):
+        # Calculate current scheduled sampling probability
+        current_sched_prob = get_scheduled_sampling_prob(
+            epoch, 
+            args.epochs,
+            args.initial_sched_prob,
+            args.final_sched_prob
+        )       
         total_loss = 0.0
         pbar = tqdm(loader, desc=f"Epoch {epoch}/{args.epochs}")
         for batch_idx, (imgs, acts) in enumerate(pbar):
@@ -576,7 +590,7 @@ def main():
             # -----  initial frame for rollout ---------------------------------------
             init = imgs[:, :1].to(device)          # (B,1,3,H,W)
             # -----  scheduled sampling rollout -------------------------------------
-            preds = model.rollout(init, acts.to(device), truth, args.sched_sample_prob)  # (B,T,num_patches,embed_dim)
+            preds = model.rollout(init, acts.to(device), truth, current_sched_prob)  # (B,T,num_patches,embed_dim)
 
             # -----  drop t=0 from loss (we never predict frame-0) --------------------
             pred = preds[:,1:]    # (B,T-1,num_patches,embed_dim)
@@ -660,3 +674,7 @@ def vicreg_loss(x, y, sim_coeff=1.0, var_coeff=1.0, cov_coeff=0.01, eps=1e-4):
 
 if __name__ == "__main__":
     main() 
+
+
+
+    # python train_jepa.py --data-dir "C:\Users\test\OneDrive\Github2022\DUMMY-model\DL25SP_small\train_subset" --output-dir ./test/ --sched-sample-prob 0.5 --epochs 12  --lr 1e-4  --predictor-pool attn  --batch-size 32
